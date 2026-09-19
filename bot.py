@@ -1,7 +1,8 @@
 import os
 import logging
+import asyncio
 from pymongo import MongoClient
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
@@ -24,7 +25,9 @@ WAITING_PASSWORD = 2
 WAITING_NUMBER_ADD = 3
 WAITING_LOGIN_NUMBER = 4
 WAITING_DELETE_NUMBER = 5
+WAITING_OTP_NUMBER = 6
 login_sessions = {}
+active_listeners = {}
 
 def main_menu():
     keyboard = [
@@ -32,6 +35,7 @@ def main_menu():
         [InlineKeyboardButton("📱 সেভ করা নম্বর", callback_data="list")],
         [InlineKeyboardButton("🔑 লগইন করুন", callback_data="login")],
         [InlineKeyboardButton("🗑️ নম্বর ডিলিট করুন", callback_data="delete")],
+        [InlineKeyboardButton("⚡ OTP নিন", callback_data="get_otp")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -46,6 +50,54 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=main_menu()
     )
+
+async def get_otp_for_number(phone, session_string, bot_app):
+    """নম্বরে OTP request করে এবং আসলে forward করে"""
+    try:
+        client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
+        await client.connect()
+
+        # OTP request পাঠাও
+        await client.send_code_request(phone)
+        await bot_app.bot.send_message(
+            OWNER_ID,
+            f"📱 `{phone}` নম্বরে OTP পাঠানো হয়েছে!\n⏳ অপেক্ষা করুন...",
+            parse_mode="Markdown"
+        )
+
+        # OTP আসার জন্য অপেক্ষা করো
+        @client.on(events.NewMessage(from_users=777000))
+        async def otp_handler(event):
+            msg = event.message.text
+            await bot_app.bot.send_message(
+                OWNER_ID,
+                f"⚡ *OTP এসেছে!*\n\n"
+                f"📱 নম্বর: `{phone}`\n"
+                f"🔑 মেসেজ:\n{msg}",
+                parse_mode="Markdown"
+            )
+            await client.disconnect()
+            if phone in active_listeners:
+                del active_listeners[phone]
+
+        active_listeners[phone] = client
+
+        # ৬০ সেকেন্ড পর্যন্ত অপেক্ষা করো
+        await asyncio.sleep(60)
+        if phone in active_listeners:
+            await client.disconnect()
+            del active_listeners[phone]
+            await bot_app.bot.send_message(
+                OWNER_ID,
+                f"⏰ `{phone}` এর OTP timeout হয়েছে!",
+                parse_mode="Markdown"
+            )
+
+    except Exception as e:
+        await bot_app.bot.send_message(
+            OWNER_ID,
+            f"❌ Error: {str(e)}",
+        )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -78,6 +130,43 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = WAITING_DELETE_NUMBER
         await query.message.reply_text("📝 ডিলিট করতে নম্বর লিখুন:")
 
+    elif query.data == "get_otp":
+        all_numbers = list(numbers_col.find({"active": True}))
+        if not all_numbers:
+            await query.message.reply_text("❌ কোনো Active নম্বর নেই!\nআগে নম্বর login করুন।", reply_markup=main_menu())
+            return
+        if len(all_numbers) == 1:
+            # একটাই নম্বর থাকলে সরাসরি OTP নাও
+            acc = all_numbers[0]
+            await query.message.reply_text(f"⏳ `{acc['phone']}` এ OTP পাঠানো হচ্ছে...", parse_mode="Markdown")
+            asyncio.create_task(
+                get_otp_for_number(acc['phone'], acc['session'], context.application)
+            )
+        else:
+            # একাধিক নম্বর থাকলে বেছে নাও
+            keyboard = []
+            for acc in all_numbers:
+                keyboard.append([InlineKeyboardButton(
+                    f"📱 {acc['phone']}",
+                    callback_data=f"otp_{acc['phone']}"
+                )])
+            keyboard.append([InlineKeyboardButton("🔙 ব্যাক", callback_data="menu")])
+            await query.message.reply_text(
+                "কোন নম্বরের OTP নিতে চান?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+    elif query.data.startswith("otp_"):
+        phone = query.data.replace("otp_", "")
+        acc = numbers_col.find_one({"phone": phone})
+        if not acc:
+            await query.message.reply_text("❌ নম্বর পাওয়া যায়নি!", reply_markup=main_menu())
+            return
+        await query.message.reply_text(f"⏳ `{phone}` এ OTP পাঠানো হচ্ছে...", parse_mode="Markdown")
+        asyncio.create_task(
+            get_otp_for_number(phone, acc['session'], context.application)
+        )
+
     elif query.data == "menu":
         context.user_data["state"] = None
         await query.message.reply_text(
@@ -96,7 +185,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == WAITING_NUMBER_ADD:
         context.user_data["state"] = None
         if not text.startswith("+"):
-            await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন!\nযেমন: +8801XXXXXXXXX", reply_markup=main_menu())
+            await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন!", reply_markup=main_menu())
             return
         if numbers_col.find_one({"phone": text}):
             await update.message.reply_text(f"⚠️ {text} আগে থেকেই আছে!", reply_markup=main_menu())
@@ -107,7 +196,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif state == WAITING_LOGIN_NUMBER:
         if not numbers_col.find_one({"phone": text}):
             context.user_data["state"] = None
-            await update.message.reply_text(f"❌ {text} লিস্টে নেই!\nআগে নম্বর যোগ করুন।", reply_markup=main_menu())
+            await update.message.reply_text(f"❌ {text} লিস্টে নেই!", reply_markup=main_menu())
             return
         try:
             client = TelegramClient(StringSession(), API_ID, API_HASH)
@@ -115,7 +204,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await client.send_code_request(text)
             login_sessions[update.effective_user.id] = {"client": client, "phone": text}
             context.user_data["state"] = WAITING_CODE
-            await update.message.reply_text("📱 OTP পাঠানো হয়েছে!\nTelegram থেকে কোডটি দিন:")
+            await update.message.reply_text("📱 OTP পাঠানো হয়েছে! কোড দিন:")
         except Exception as e:
             context.user_data["state"] = None
             await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
@@ -124,7 +213,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session_data = login_sessions.get(update.effective_user.id)
         if not session_data:
             context.user_data["state"] = None
-            await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
+            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
             return
         client = session_data["client"]
         phone = session_data["phone"]
@@ -138,7 +227,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ {phone} লগইন সফল!", reply_markup=main_menu())
         except SessionPasswordNeededError:
             context.user_data["state"] = WAITING_PASSWORD
-            await update.message.reply_text("🔐 2FA চালু আছে!\nপাসওয়ার্ড দিন:")
+            await update.message.reply_text("🔐 2FA পাসওয়ার্ড দিন:")
         except Exception as e:
             context.user_data["state"] = None
             if update.effective_user.id in login_sessions:
@@ -149,7 +238,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session_data = login_sessions.get(update.effective_user.id)
         if not session_data:
             context.user_data["state"] = None
-            await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
+            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
             return
         client = session_data["client"]
         phone = session_data["phone"]
@@ -169,6 +258,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif state == WAITING_DELETE_NUMBER:
         context.user_data["state"] = None
+        if text in active_listeners:
+            await active_listeners[text].disconnect()
+            del active_listeners[text]
         result = numbers_col.delete_one({"phone": text})
         if result.deleted_count:
             await update.message.reply_text(f"✅ {text} ডিলিট হয়েছে!", reply_markup=main_menu())
@@ -178,7 +270,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         context.user_data["state"] = None
         await update.message.reply_text(
-            "👑 *JISAN NUMBER BOT*\n\nমেনু থেকে অপশন বেছে নিন।",
+            "👑 *JISAN NUMBER BOT*",
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
