@@ -155,7 +155,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "search":
         context.user_data["state"] = WAITING_SEARCH
-        await query.message.reply_text("🔍 খুঁজতে নম্বর লিখুন (যেমন: +8801XXXXXXXXX):")
+        await query.message.reply_text("🔍 নম্বর বা নাম লিখুন:")
 
     elif query.data == "login":
         context.user_data["state"] = WAITING_LOGIN_NUMBER
@@ -253,7 +253,39 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get("state")
     text = update.message.text.strip()
 
-    if state == WAITING_NUMBER_ADD:
+    if state == WAITING_SEARCH:
+        context.user_data["state"] = None
+        acc = numbers_col.find_one({
+            "$or": [
+                {"phone": {"$regex": text, "$options": "i"}},
+                {"tg_name": {"$regex": text, "$options": "i"}}
+            ]
+        })
+        if not acc:
+            await update.message.reply_text(
+                f"❌ '{text}' পাওয়া যায়নি!",
+                reply_markup=main_menu()
+            )
+            return
+        pos = acc.get("position", "?")
+        name = acc.get("tg_name", "Unknown")
+        status = "✅ Active" if acc.get("active") else "❌ Login নেই"
+        listener = "👂 Listening" if acc['phone'] in active_listeners else "🔇 Off"
+        result_text = (
+            f"🔍 *খোঁজার ফলাফল:*\n\n"
+            f"📍 Position: {pos}\n"
+            f"👤 নাম: {name}\n"
+            f"📱 নম্বর: `{acc['phone']}`\n"
+            f"🔘 Status: {status}\n"
+            f"👂 Listener: {listener}"
+        )
+        await update.message.reply_text(
+            result_text,
+            parse_mode="Markdown",
+            reply_markup=main_menu()
+        )
+
+    elif state == WAITING_NUMBER_ADD:
         context.user_data["state"] = None
         if not text.startswith("+"):
             await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন!", reply_markup=main_menu())
@@ -273,36 +305,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ {text} সেভ হয়েছে!\n📍 Position: {position}",
             reply_markup=main_menu()
         )
-
-    elif state == WAITING_SEARCH:
-        context.user_data["state"] = None
-        search_text = text
-        # নম্বর দিয়ে বা নাম দিয়ে খুঁজো
-        acc = numbers_col.find_one({
-            "$or": [
-                {"phone": {"$regex": search_text, "$options": "i"}},
-                {"tg_name": {"$regex": search_text, "$options": "i"}}
-            ]
-        })
-        if not acc:
-            await update.message.reply_text(
-                f"❌ '{search_text}' পাওয়া যায়নি!",
-                reply_markup=main_menu()
-            )
-            return
-        pos = acc.get("position", "?")
-        name = acc.get("tg_name", "Unknown")
-        status = "✅ Active" if acc.get("active") else "❌ Login নেই"
-        listener = "👂 Listening" if acc['phone'] in active_listeners else "🔇 Off"
-        result_text = (
-            f"🔍 *খোঁজার ফলাফল:*\n\n"
-            f"📍 Position: {pos}\n"
-            f"👤 নাম: {name}\n"
-            f"📱 নম্বর: `{acc['phone']}`\n"
-            f"🔘 Status: {status}\n"
-            f"👂 Listener: {listener}"
-        )
-        await update.message.reply_text(result_text, parse_mode="Markdown", reply_markup=main_menu())
 
     elif state == WAITING_LOGIN_NUMBER:
         if not numbers_col.find_one({"phone": text}):
