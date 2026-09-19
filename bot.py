@@ -36,17 +36,16 @@ def main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # আগে নিচের Reply keyboard সরাও
     await update.message.reply_text(
         "লোড হচ্ছে...",
         reply_markup=ReplyKeyboardRemove()
     )
-    # তারপর Inline মেনু দেখাও
     await update.message.reply_text(
         "👑 *JISAN NUMBER BOT*\n\nস্বাগতম! নিচের মেনু থেকে অপশন বেছে নিন।",
         parse_mode="Markdown",
         reply_markup=main_menu()
     )
+    return ConversationHandler.END
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -54,7 +53,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.from_user.id != OWNER_ID:
         await query.message.reply_text("❌ Permission নেই!")
-        return
+        return ConversationHandler.END
 
     if query.data == "add":
         await query.message.reply_text("📝 নতুন নম্বর লিখুন (যেমন: +8801XXXXXXXXX):")
@@ -70,6 +69,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status = "✅ Active" if acc.get("active") else "❌ Login নেই"
                 text += f"{i}. `{acc['phone']}` - {status}\n"
             await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu())
+        return ConversationHandler.END
 
     elif query.data == "login":
         await query.message.reply_text("📝 লগইন করতে নম্বর লিখুন:")
@@ -85,9 +85,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
+        return ConversationHandler.END
 
 async def add_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.text.strip()
+    if not phone.startswith("+"):
+        await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন! যেমন: +8801XXXXXXXXX", reply_markup=main_menu())
+        return ConversationHandler.END
     if numbers_col.find_one({"phone": phone}):
         await update.message.reply_text(f"⚠️ {phone} আগে থেকেই আছে!", reply_markup=main_menu())
         return ConversationHandler.END
@@ -98,20 +102,25 @@ async def add_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def login_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.text.strip()
     if not numbers_col.find_one({"phone": phone}):
-        await update.message.reply_text(f"❌ {phone} লিস্টে নেই!", reply_markup=main_menu())
+        await update.message.reply_text(f"❌ {phone} লিস্টে নেই! আগে নম্বর যোগ করুন।", reply_markup=main_menu())
         return ConversationHandler.END
-    client = TelegramClient(StringSession(), API_ID, API_HASH)
-    await client.connect()
-    await client.send_code_request(phone)
-    login_sessions[update.effective_user.id] = {"client": client, "phone": phone}
-    await update.message.reply_text("📱 OTP পাঠানো হয়েছে! কোড দিন:")
-    return WAITING_CODE
+    try:
+        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        await client.connect()
+        await client.send_code_request(phone)
+        login_sessions[update.effective_user.id] = {"client": client, "phone": phone}
+        await update.message.reply_text("📱 OTP পাঠানো হয়েছে! Telegram থেকে কোডটি দিন:\n\n(যেমন: 12345)")
+        return WAITING_CODE
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
+        return ConversationHandler.END
 
 async def get_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    code = update.message.text.strip()
+    code = update.message.text.strip().replace(" ", "")
     session_data = login_sessions.get(user_id)
     if not session_data:
+        await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
         return ConversationHandler.END
     client = session_data["client"]
     phone = session_data["phone"]
@@ -121,13 +130,14 @@ async def get_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
         await client.disconnect()
         del login_sessions[user_id]
-        await update.message.reply_text(f"✅ {phone} লগইন সফল!", reply_markup=main_menu())
+        await update.message.reply_text(f"✅ {phone} লগইন সফল হয়েছে!", reply_markup=main_menu())
         return ConversationHandler.END
     except SessionPasswordNeededError:
-        await update.message.reply_text("🔐 2FA পাসওয়ার্ড দিন:")
+        await update.message.reply_text("🔐 2FA চালু আছে! পাসওয়ার্ড দিন:")
         return WAITING_PASSWORD
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
+        await update.message.reply_text(f"❌ Error: {str(e)}\n\nআবার /start দিন।", reply_markup=main_menu())
+        del login_sessions[user_id]
         return ConversationHandler.END
 
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,6 +145,7 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     password = update.message.text.strip()
     session_data = login_sessions.get(user_id)
     if not session_data:
+        await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
         return ConversationHandler.END
     client = session_data["client"]
     phone = session_data["phone"]
@@ -144,10 +155,11 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
         await client.disconnect()
         del login_sessions[user_id]
-        await update.message.reply_text("✅ লগইন সফল!", reply_markup=main_menu())
+        await update.message.reply_text(f"✅ {phone} লগইন সফল হয়েছে!", reply_markup=main_menu())
         return ConversationHandler.END
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
+        await update.message.reply_text(f"❌ Error: {str(e)}\n\nআবার /start দিন।", reply_markup=main_menu())
+        del login_sessions[user_id]
         return ConversationHandler.END
 
 async def delete_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,7 +174,10 @@ async def delete_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(button_handler),
+        ],
         states={
             WAITING_NUMBER_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_number)],
             WAITING_LOGIN_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, login_number)],
@@ -170,9 +185,9 @@ def main():
             WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
             WAITING_DELETE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_number)],
         },
-        fallbacks=[CommandHandler("start", start)]
+        fallbacks=[CommandHandler("start", start)],
+        per_message=False,
     )
-    application.add_handler(CommandHandler("start", start))
     application.add_handler(conv)
     print("Bot running!")
     application.run_polling(drop_pending_updates=True)
