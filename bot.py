@@ -5,7 +5,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 
@@ -36,6 +36,7 @@ def main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["state"] = None
     await update.message.reply_text(
         "লোড হচ্ছে...",
         reply_markup=ReplyKeyboardRemove()
@@ -45,8 +46,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=main_menu()
     )
-
-# --- Separate handlers, NO ConversationHandler ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -80,6 +79,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📝 ডিলিট করতে নম্বর লিখুন:")
 
     elif query.data == "menu":
+        context.user_data["state"] = None
         await query.message.reply_text(
             "👑 *JISAN NUMBER BOT*\n\nমেনু:",
             parse_mode="Markdown",
@@ -96,7 +96,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == WAITING_NUMBER_ADD:
         context.user_data["state"] = None
         if not text.startswith("+"):
-            await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন!", reply_markup=main_menu())
+            await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন!\nযেমন: +8801XXXXXXXXX", reply_markup=main_menu())
             return
         if numbers_col.find_one({"phone": text}):
             await update.message.reply_text(f"⚠️ {text} আগে থেকেই আছে!", reply_markup=main_menu())
@@ -107,7 +107,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif state == WAITING_LOGIN_NUMBER:
         if not numbers_col.find_one({"phone": text}):
             context.user_data["state"] = None
-            await update.message.reply_text(f"❌ {text} লিস্টে নেই! আগে নম্বর যোগ করুন।", reply_markup=main_menu())
+            await update.message.reply_text(f"❌ {text} লিস্টে নেই!\nআগে নম্বর যোগ করুন।", reply_markup=main_menu())
             return
         try:
             client = TelegramClient(StringSession(), API_ID, API_HASH)
@@ -115,7 +115,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await client.send_code_request(text)
             login_sessions[update.effective_user.id] = {"client": client, "phone": text}
             context.user_data["state"] = WAITING_CODE
-            await update.message.reply_text("📱 OTP পাঠানো হয়েছে! কোড দিন:")
+            await update.message.reply_text("📱 OTP পাঠানো হয়েছে!\nTelegram থেকে কোডটি দিন:")
         except Exception as e:
             context.user_data["state"] = None
             await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
@@ -124,7 +124,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session_data = login_sessions.get(update.effective_user.id)
         if not session_data:
             context.user_data["state"] = None
-            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
+            await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
             return
         client = session_data["client"]
         phone = session_data["phone"]
@@ -138,17 +138,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ {phone} লগইন সফল!", reply_markup=main_menu())
         except SessionPasswordNeededError:
             context.user_data["state"] = WAITING_PASSWORD
-            await update.message.reply_text("🔐 2FA পাসওয়ার্ড দিন:")
+            await update.message.reply_text("🔐 2FA চালু আছে!\nপাসওয়ার্ড দিন:")
         except Exception as e:
             context.user_data["state"] = None
-            del login_sessions[update.effective_user.id]
+            if update.effective_user.id in login_sessions:
+                del login_sessions[update.effective_user.id]
             await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
 
     elif state == WAITING_PASSWORD:
         session_data = login_sessions.get(update.effective_user.id)
         if not session_data:
             context.user_data["state"] = None
-            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
+            await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
             return
         client = session_data["client"]
         phone = session_data["phone"]
@@ -162,7 +163,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ {phone} লগইন সফল!", reply_markup=main_menu())
         except Exception as e:
             context.user_data["state"] = None
-            del login_sessions[update.effective_user.id]
+            if update.effective_user.id in login_sessions:
+                del login_sessions[update.effective_user.id]
             await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
 
     elif state == WAITING_DELETE_NUMBER:
@@ -174,8 +176,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ {text} পাওয়া যায়নি!", reply_markup=main_menu())
 
     else:
+        context.user_data["state"] = None
         await update.message.reply_text(
-            "👑 *JISAN NUMBER BOT*",
+            "👑 *JISAN NUMBER BOT*\n\nমেনু থেকে অপশন বেছে নিন।",
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
@@ -186,7 +189,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     print("Bot running!")
-    application.run_polling(drop_pending_updates=True)
+    application.run_polling(drop_pending_updates=False)
 
 if __name__ == "__main__":
     main()
