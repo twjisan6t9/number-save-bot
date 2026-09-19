@@ -3,17 +3,22 @@ import asyncio
 import logging
 from threading import Thread
 from flask import Flask
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler,
+)
 from pymongo import MongoClient
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
@@ -25,25 +30,18 @@ mongo = MongoClient(MONGO_URI)
 db = mongo["numbersavebot"]
 numbers_col = db["numbers"]
 
+WAITING_CODE = 1
+WAITING_PASSWORD = 2
+login_sessions = {}
+
 flask_app = Flask(__name__)
 
-@flask_app.route('/')
+@flask_app.route("/")
 def home():
     return "Bot is running!"
 
-bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-
-class LoginState(StatesGroup):
-    waiting_code = State()
-    waiting_password = State()
-
-login_sessions = {}
-
-@dp.message(Command("start"))
-async def start(message: types.Message):
-    await message.answer(
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "👋 Welcome!\n\n"
         "/addnumber +880X - Number add\n"
         "/login +880X - Login\n"
@@ -51,128 +49,148 @@ async def start(message: types.Message):
         "/delete +880X - Delete"
     )
 
-@dp.message(Command("addnumber"))
-async def addnumber(message: types.Message):
-    if message.from_user.id != OWNER_ID:
-        await message.answer("❌ Permission nai!")
+async def addnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ Permission nai!")
         return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("❌ Use: /addnumber +880XXXXXXXXX")
+    if not context.args:
+        await update.message.reply_text("❌ Use: /addnumber +880XXXXXXXXX")
         return
-    phone = args[1]
+    phone = context.args[0]
     if numbers_col.find_one({"phone": phone}):
-        await message.answer(f"⚠️ {phone} already ache!")
+        await update.message.reply_text(f"⚠️ {phone} already ache!")
         return
     numbers_col.insert_one({"phone": phone, "session": None, "active": False})
-    await message.answer(f"✅ {phone} saved!")
+    await update.message.reply_text(f"✅ {phone} saved!")
 
-@dp.message(Command("accounts"))
-async def accounts(message: types.Message):
-    if message.from_user.id != OWNER_ID:
-        await message.answer("❌ Permission nai!")
+async def accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ Permission nai!")
         return
     all_numbers = list(numbers_col.find())
     if not all_numbers:
-        await message.answer("📋 Kono number nai!")
+        await update.message.reply_text("📋 Kono number nai!")
         return
     text = "📋 Numbers:\n\n"
     for i, acc in enumerate(all_numbers, 1):
         status = "✅ Active" if acc.get("active") else "❌ Not logged in"
         text += f"{i}. {acc['phone']} - {status}\n"
-    await message.answer(text)
+    await update.message.reply_text(text)
 
-@dp.message(Command("login"))
-async def login(message: types.Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
-        await message.answer("❌ Permission nai!")
+async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ Permission nai!")
         return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("❌ Use: /login +880XXXXXXXXX")
+    if not context.args:
+        await update.message.reply_text("❌ Use: /login +880XXXXXXXXX")
         return
-    phone = args[1]
+    phone = context.args[0]
     if not numbers_col.find_one({"phone": phone}):
-        await message.answer(f"❌ {phone} list-e nai!")
+        await update.message.reply_text(f"❌ {phone} list-e nai!")
         return
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     await client.send_code_request(phone)
-    login_sessions[message.from_user.id] = {"client": client, "phone": phone}
-    await state.set_state(LoginState.waiting_code)
-    await message.answer("📱 OTP pathano hoyeche! Code dao:")
+    login_sessions[update.effective_user.id] = {"client": client, "phone": phone}
+    await update.message.reply_text("📱 OTP pathano hoyeche! Code dao:")
+    return WAITING_CODE
 
-@dp.message(LoginState.waiting_code)
-async def get_code(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    code = message.text.strip()
+async def get_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    code = update.message.text.strip()
     session_data = login_sessions.get(user_id)
     if not session_data:
-        await state.clear()
-        return
+        return ConversationHandler.END
     client = session_data["client"]
     phone = session_data["phone"]
     try:
         await client.sign_in(phone, code)
         session_string = client.session.save()
-        numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
+        numbers_col.update_one(
+            {"phone": phone},
+            {"$set": {"session": session_string, "active": True}},
+        )
         await client.disconnect()
         del login_sessions[user_id]
-        await state.clear()
-        await message.answer(f"✅ {phone} login hoyeche!")
+        await update.message.reply_text(f"✅ {phone} login hoyeche!")
+        return ConversationHandler.END
     except SessionPasswordNeededError:
-        await state.set_state(LoginState.waiting_password)
-        await message.answer("🔐 2FA password dao:")
+        await update.message.reply_text("🔐 2FA password dao:")
+        return WAITING_PASSWORD
     except Exception as e:
-        await state.clear()
-        await message.answer(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+        return ConversationHandler.END
 
-@dp.message(LoginState.waiting_password)
-async def get_password(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    password = message.text.strip()
+async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    password = update.message.text.strip()
     session_data = login_sessions.get(user_id)
     if not session_data:
-        await state.clear()
-        return
+        return ConversationHandler.END
     client = session_data["client"]
     phone = session_data["phone"]
     try:
         await client.sign_in(password=password)
         session_string = client.session.save()
-        numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
+        numbers_col.update_one(
+            {"phone": phone},
+            {"$set": {"session": session_string, "active": True}},
+        )
         await client.disconnect()
         del login_sessions[user_id]
-        await state.clear()
-        await message.answer(f"✅ Login hoyeche!")
+        await update.message.reply_text("✅ Login hoyeche!")
+        return ConversationHandler.END
     except Exception as e:
-        await state.clear()
-        await message.answer(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+        return ConversationHandler.END
 
-@dp.message(Command("delete"))
-async def delete_number(message: types.Message):
-    if message.from_user.id != OWNER_ID:
-        await message.answer("❌ Permission nai!")
+async def delete_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ Permission nai!")
         return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("❌ Use: /delete +880XXXXXXXXX")
+    if not context.args:
+        await update.message.reply_text("❌ Use: /delete +880XXXXXXXXX")
         return
-    phone = args[1]
+    phone = context.args[0]
     result = numbers_col.delete_one({"phone": phone})
     if result.deleted_count:
-        await message.answer(f"✅ {phone} deleted!")
+        await update.message.reply_text(f"✅ {phone} deleted!")
     else:
-        await message.answer(f"❌ {phone} pawa jaini!")
+        await update.message.reply_text(f"❌ {phone} pawa jaini!")
 
 def run_bot():
-    async def main():
-        print("Bot starting...")
-        await dp.start_polling(bot)
-    asyncio.run(main())
+    async def _run():
+        logger.info("Bot starting...")
+        application = (
+            Application.builder()
+            .token(BOT_TOKEN)
+            .concurrent_updates(True)
+            .build()
+        )
+        conv = ConversationHandler(
+            entry_points=[CommandHandler("login", login)],
+            states={
+                WAITING_CODE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, get_code)
+                ],
+                WAITING_PASSWORD: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)
+                ],
+            },
+            fallbacks=[],
+        )
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("addnumber", addnumber))
+        application.add_handler(CommandHandler("accounts", accounts))
+        application.add_handler(CommandHandler("delete", delete_number))
+        application.add_handler(conv)
+        logger.info("Bot polling...")
+        await application.run_polling(drop_pending_updates=True)
+
+    asyncio.run(_run())
 
 if __name__ == "__main__":
-    t = Thread(target=run_bot, daemon=True)
-    t.start()
+    bot_thread = Thread(target=run_bot, daemon=True)
+    bot_thread.start()
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
