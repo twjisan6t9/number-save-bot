@@ -25,18 +25,17 @@ WAITING_PASSWORD = 2
 WAITING_NUMBER_ADD = 3
 WAITING_LOGIN_NUMBER = 4
 WAITING_DELETE_NUMBER = 5
+WAITING_SEARCH = 6
 login_sessions = {}
 active_listeners = {}
 
 def get_next_position():
-    """পরবর্তী position নম্বর বের করো"""
     all_numbers = list(numbers_col.find().sort("position", -1).limit(1))
     if not all_numbers:
         return 1
     return all_numbers[0].get("position", 0) + 1
 
 def reorder_positions():
-    """Delete এর পরে position ঠিক করো"""
     all_numbers = list(numbers_col.find().sort("position", 1))
     for i, acc in enumerate(all_numbers, 1):
         numbers_col.update_one(
@@ -44,27 +43,11 @@ def reorder_positions():
             {"$set": {"position": i}}
         )
 
-async def get_telegram_name(session_string):
-    """Telegram account এর নাম বের করো"""
-    try:
-        client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
-        await client.connect()
-        if await client.is_user_authorized():
-            me = await client.get_me()
-            first = me.first_name or ""
-            last = me.last_name or ""
-            full_name = f"{first} {last}".strip()
-            await client.disconnect()
-            return full_name
-        await client.disconnect()
-        return "Unknown"
-    except:
-        return "Unknown"
-
 def main_menu():
     keyboard = [
         [InlineKeyboardButton("➕ নতুন নম্বর যোগ করুন", callback_data="add")],
         [InlineKeyboardButton("📱 সেভ করা নম্বর", callback_data="list")],
+        [InlineKeyboardButton("🔍 নম্বর খুঁজুন", callback_data="search")],
         [InlineKeyboardButton("🔑 লগইন করুন", callback_data="login")],
         [InlineKeyboardButton("🗑️ নম্বর ডিলিট করুন", callback_data="delete")],
         [InlineKeyboardButton("⚡ OTP নিন", callback_data="get_otp")],
@@ -170,13 +153,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"{pos}️⃣ {name} - `{acc['phone']}` {status} {listener}\n"
             await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
+    elif query.data == "search":
+        context.user_data["state"] = WAITING_SEARCH
+        await query.message.reply_text("🔍 খুঁজতে নম্বর লিখুন (যেমন: +8801XXXXXXXXX):")
+
     elif query.data == "login":
         context.user_data["state"] = WAITING_LOGIN_NUMBER
         await query.message.reply_text("📝 লগইন করতে নম্বর লিখুন:")
 
     elif query.data == "delete":
-        context.user_data["state"] = WAITING_DELETE_NUMBER
-        # নম্বর list দেখাও
         all_numbers = list(numbers_col.find().sort("position", 1))
         if not all_numbers:
             await query.message.reply_text("📋 কোনো নম্বর নেই!", reply_markup=main_menu())
@@ -217,7 +202,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if len(all_numbers) == 1:
             acc = all_numbers[0]
-            name = acc.get("tg_name", "Unknown")
             await query.message.reply_text(
                 f"⏳ `{acc['phone']}` এ OTP listen শুরু হচ্ছে...",
                 parse_mode="Markdown"
@@ -285,7 +269,40 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "position": position,
             "tg_name": "Unknown"
         })
-        await update.message.reply_text(f"✅ {text} সেভ হয়েছে! ({position} নম্বরে)", reply_markup=main_menu())
+        await update.message.reply_text(
+            f"✅ {text} সেভ হয়েছে!\n📍 Position: {position}",
+            reply_markup=main_menu()
+        )
+
+    elif state == WAITING_SEARCH:
+        context.user_data["state"] = None
+        search_text = text
+        # নম্বর দিয়ে বা নাম দিয়ে খুঁজো
+        acc = numbers_col.find_one({
+            "$or": [
+                {"phone": {"$regex": search_text, "$options": "i"}},
+                {"tg_name": {"$regex": search_text, "$options": "i"}}
+            ]
+        })
+        if not acc:
+            await update.message.reply_text(
+                f"❌ '{search_text}' পাওয়া যায়নি!",
+                reply_markup=main_menu()
+            )
+            return
+        pos = acc.get("position", "?")
+        name = acc.get("tg_name", "Unknown")
+        status = "✅ Active" if acc.get("active") else "❌ Login নেই"
+        listener = "👂 Listening" if acc['phone'] in active_listeners else "🔇 Off"
+        result_text = (
+            f"🔍 *খোঁজার ফলাফল:*\n\n"
+            f"📍 Position: {pos}\n"
+            f"👤 নাম: {name}\n"
+            f"📱 নম্বর: `{acc['phone']}`\n"
+            f"🔘 Status: {status}\n"
+            f"👂 Listener: {listener}"
+        )
+        await update.message.reply_text(result_text, parse_mode="Markdown", reply_markup=main_menu())
 
     elif state == WAITING_LOGIN_NUMBER:
         if not numbers_col.find_one({"phone": text}):
@@ -314,7 +331,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await client.sign_in(phone, text)
             session_string = client.session.save()
-            # Telegram নাম বের করো
             me = await client.get_me()
             first = me.first_name or ""
             last = me.last_name or ""
