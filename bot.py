@@ -45,7 +45,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=main_menu()
     )
-    return ConversationHandler.END
+
+# --- Separate handlers, NO ConversationHandler ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -53,11 +54,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.from_user.id != OWNER_ID:
         await query.message.reply_text("❌ Permission নেই!")
-        return ConversationHandler.END
+        return
 
     if query.data == "add":
+        context.user_data["state"] = WAITING_NUMBER_ADD
         await query.message.reply_text("📝 নতুন নম্বর লিখুন (যেমন: +8801XXXXXXXXX):")
-        return WAITING_NUMBER_ADD
 
     elif query.data == "list":
         all_numbers = list(numbers_col.find())
@@ -69,15 +70,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status = "✅ Active" if acc.get("active") else "❌ Login নেই"
                 text += f"{i}. `{acc['phone']}` - {status}\n"
             await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu())
-        return ConversationHandler.END
 
     elif query.data == "login":
+        context.user_data["state"] = WAITING_LOGIN_NUMBER
         await query.message.reply_text("📝 লগইন করতে নম্বর লিখুন:")
-        return WAITING_LOGIN_NUMBER
 
     elif query.data == "delete":
+        context.user_data["state"] = WAITING_DELETE_NUMBER
         await query.message.reply_text("📝 ডিলিট করতে নম্বর লিখুন:")
-        return WAITING_DELETE_NUMBER
 
     elif query.data == "menu":
         await query.message.reply_text(
@@ -85,110 +85,106 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
-        return ConversationHandler.END
 
-async def add_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text.strip()
-    if not phone.startswith("+"):
-        await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন! যেমন: +8801XXXXXXXXX", reply_markup=main_menu())
-        return ConversationHandler.END
-    if numbers_col.find_one({"phone": phone}):
-        await update.message.reply_text(f"⚠️ {phone} আগে থেকেই আছে!", reply_markup=main_menu())
-        return ConversationHandler.END
-    numbers_col.insert_one({"phone": phone, "session": None, "active": False})
-    await update.message.reply_text(f"✅ {phone} সেভ হয়েছে!", reply_markup=main_menu())
-    return ConversationHandler.END
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
 
-async def login_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text.strip()
-    if not numbers_col.find_one({"phone": phone}):
-        await update.message.reply_text(f"❌ {phone} লিস্টে নেই! আগে নম্বর যোগ করুন।", reply_markup=main_menu())
-        return ConversationHandler.END
-    try:
-        client = TelegramClient(StringSession(), API_ID, API_HASH)
-        await client.connect()
-        await client.send_code_request(phone)
-        login_sessions[update.effective_user.id] = {"client": client, "phone": phone}
-        await update.message.reply_text("📱 OTP পাঠানো হয়েছে! Telegram থেকে কোডটি দিন:\n\n(যেমন: 12345)")
-        return WAITING_CODE
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
-        return ConversationHandler.END
+    state = context.user_data.get("state")
+    text = update.message.text.strip()
 
-async def get_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    code = update.message.text.strip().replace(" ", "")
-    session_data = login_sessions.get(user_id)
-    if not session_data:
-        await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
-        return ConversationHandler.END
-    client = session_data["client"]
-    phone = session_data["phone"]
-    try:
-        await client.sign_in(phone, code)
-        session_string = client.session.save()
-        numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
-        await client.disconnect()
-        del login_sessions[user_id]
-        await update.message.reply_text(f"✅ {phone} লগইন সফল হয়েছে!", reply_markup=main_menu())
-        return ConversationHandler.END
-    except SessionPasswordNeededError:
-        await update.message.reply_text("🔐 2FA চালু আছে! পাসওয়ার্ড দিন:")
-        return WAITING_PASSWORD
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}\n\nআবার /start দিন।", reply_markup=main_menu())
-        del login_sessions[user_id]
-        return ConversationHandler.END
+    if state == WAITING_NUMBER_ADD:
+        context.user_data["state"] = None
+        if not text.startswith("+"):
+            await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন!", reply_markup=main_menu())
+            return
+        if numbers_col.find_one({"phone": text}):
+            await update.message.reply_text(f"⚠️ {text} আগে থেকেই আছে!", reply_markup=main_menu())
+            return
+        numbers_col.insert_one({"phone": text, "session": None, "active": False})
+        await update.message.reply_text(f"✅ {text} সেভ হয়েছে!", reply_markup=main_menu())
 
-async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    password = update.message.text.strip()
-    session_data = login_sessions.get(user_id)
-    if not session_data:
-        await update.message.reply_text("❌ Session নেই! আবার চেষ্টা করুন।", reply_markup=main_menu())
-        return ConversationHandler.END
-    client = session_data["client"]
-    phone = session_data["phone"]
-    try:
-        await client.sign_in(password=password)
-        session_string = client.session.save()
-        numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
-        await client.disconnect()
-        del login_sessions[user_id]
-        await update.message.reply_text(f"✅ {phone} লগইন সফল হয়েছে!", reply_markup=main_menu())
-        return ConversationHandler.END
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}\n\nআবার /start দিন।", reply_markup=main_menu())
-        del login_sessions[user_id]
-        return ConversationHandler.END
+    elif state == WAITING_LOGIN_NUMBER:
+        if not numbers_col.find_one({"phone": text}):
+            context.user_data["state"] = None
+            await update.message.reply_text(f"❌ {text} লিস্টে নেই! আগে নম্বর যোগ করুন।", reply_markup=main_menu())
+            return
+        try:
+            client = TelegramClient(StringSession(), API_ID, API_HASH)
+            await client.connect()
+            await client.send_code_request(text)
+            login_sessions[update.effective_user.id] = {"client": client, "phone": text}
+            context.user_data["state"] = WAITING_CODE
+            await update.message.reply_text("📱 OTP পাঠানো হয়েছে! কোড দিন:")
+        except Exception as e:
+            context.user_data["state"] = None
+            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
 
-async def delete_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text.strip()
-    result = numbers_col.delete_one({"phone": phone})
-    if result.deleted_count:
-        await update.message.reply_text(f"✅ {phone} ডিলিট হয়েছে!", reply_markup=main_menu())
+    elif state == WAITING_CODE:
+        session_data = login_sessions.get(update.effective_user.id)
+        if not session_data:
+            context.user_data["state"] = None
+            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
+            return
+        client = session_data["client"]
+        phone = session_data["phone"]
+        try:
+            await client.sign_in(phone, text)
+            session_string = client.session.save()
+            numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
+            await client.disconnect()
+            del login_sessions[update.effective_user.id]
+            context.user_data["state"] = None
+            await update.message.reply_text(f"✅ {phone} লগইন সফল!", reply_markup=main_menu())
+        except SessionPasswordNeededError:
+            context.user_data["state"] = WAITING_PASSWORD
+            await update.message.reply_text("🔐 2FA পাসওয়ার্ড দিন:")
+        except Exception as e:
+            context.user_data["state"] = None
+            del login_sessions[update.effective_user.id]
+            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
+
+    elif state == WAITING_PASSWORD:
+        session_data = login_sessions.get(update.effective_user.id)
+        if not session_data:
+            context.user_data["state"] = None
+            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
+            return
+        client = session_data["client"]
+        phone = session_data["phone"]
+        try:
+            await client.sign_in(password=text)
+            session_string = client.session.save()
+            numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
+            await client.disconnect()
+            del login_sessions[update.effective_user.id]
+            context.user_data["state"] = None
+            await update.message.reply_text(f"✅ {phone} লগইন সফল!", reply_markup=main_menu())
+        except Exception as e:
+            context.user_data["state"] = None
+            del login_sessions[update.effective_user.id]
+            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
+
+    elif state == WAITING_DELETE_NUMBER:
+        context.user_data["state"] = None
+        result = numbers_col.delete_one({"phone": text})
+        if result.deleted_count:
+            await update.message.reply_text(f"✅ {text} ডিলিট হয়েছে!", reply_markup=main_menu())
+        else:
+            await update.message.reply_text(f"❌ {text} পাওয়া যায়নি!", reply_markup=main_menu())
+
     else:
-        await update.message.reply_text(f"❌ {phone} পাওয়া যায়নি!", reply_markup=main_menu())
-    return ConversationHandler.END
+        await update.message.reply_text(
+            "👑 *JISAN NUMBER BOT*",
+            parse_mode="Markdown",
+            reply_markup=main_menu()
+        )
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
-    conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start),
-            CallbackQueryHandler(button_handler),
-        ],
-        states={
-            WAITING_NUMBER_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_number)],
-            WAITING_LOGIN_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, login_number)],
-            WAITING_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_code)],
-            WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
-            WAITING_DELETE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_number)],
-        },
-        fallbacks=[CommandHandler("start", start)],
-        per_message=False,
-    )
-    application.add_handler(conv)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     print("Bot running!")
     application.run_polling(drop_pending_updates=True)
 
