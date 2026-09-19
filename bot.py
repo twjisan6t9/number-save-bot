@@ -64,10 +64,9 @@ async def get_otp_for_number(phone, session_string, bot_app):
             await client.disconnect()
             return
 
-        await client.send_code_request(phone)
         await bot_app.bot.send_message(
             OWNER_ID,
-            f"📱 `{phone}` নম্বরে OTP পাঠানো হয়েছে!\n⏳ অপেক্ষা করুন...",
+            f"👂 `{phone}` নম্বর listen করছে...\n⏳ এখন অন্য device থেকে login করুন, OTP আসলে এখানে পাঠাবো।",
             parse_mode="Markdown"
         )
 
@@ -88,7 +87,7 @@ async def get_otp_for_number(phone, session_string, bot_app):
 
         active_listeners[phone] = client
 
-        for _ in range(90):
+        for _ in range(120):
             await asyncio.sleep(1)
             if otp_received:
                 break
@@ -152,7 +151,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(all_numbers) == 1:
             acc = all_numbers[0]
             await query.message.reply_text(
-                f"⏳ `{acc['phone']}` এ OTP পাঠানো হচ্ছে...",
+                f"⏳ `{acc['phone']}` এ OTP listen শুরু হচ্ছে...",
                 parse_mode="Markdown"
             )
             asyncio.create_task(
@@ -178,7 +177,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ নম্বর পাওয়া যায়নি!", reply_markup=main_menu())
             return
         await query.message.reply_text(
-            f"⏳ `{phone}` এ OTP পাঠানো হচ্ছে...",
+            f"⏳ `{phone}` এ OTP listen শুরু হচ্ছে...",
             parse_mode="Markdown"
         )
         asyncio.create_task(
@@ -238,7 +237,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await client.sign_in(phone, text)
             session_string = client.session.save()
-            numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
+            numbers_col.update_one(
+                {"phone": phone},
+                {"$set": {"session": session_string, "active": True}}
+            )
             await client.disconnect()
             del login_sessions[update.effective_user.id]
             context.user_data["state"] = None
@@ -263,7 +265,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await client.sign_in(password=text)
             session_string = client.session.save()
-            numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
+            numbers_col.update_one(
+                {"phone": phone},
+                {"$set": {"session": session_string, "active": True}}
+            )
             await client.disconnect()
             del login_sessions[update.effective_user.id]
             context.user_data["state"] = None
