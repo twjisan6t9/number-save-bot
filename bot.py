@@ -415,4 +415,4 @@ def main():
     application.run_polling(drop_pending_updates=False)
 
 if __name__ == "__main__":
-    main()
+    main()nerc
