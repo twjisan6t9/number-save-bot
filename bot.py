@@ -155,7 +155,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "search":
         context.user_data["state"] = WAITING_SEARCH
-        await query.message.reply_text("🔍 নম্বর বা নাম লিখুন:")
+        await query.message.reply_text(
+            "🔍 নম্বর বা নাম লিখুন:\n\n"
+            "_(0 দিয়েও লিখতে পারো, যেমন: 01XXXXXXXXX)_",
+            parse_mode="Markdown"
+        )
 
     elif query.data == "login":
         context.user_data["state"] = WAITING_LOGIN_NUMBER
@@ -255,10 +259,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == WAITING_SEARCH:
         context.user_data["state"] = None
+        # 0 দিয়ে শুরু হলে +880 যোগ করো
+        if text.startswith("0"):
+            search_text = "+88" + text
+        else:
+            search_text = text
         acc = numbers_col.find_one({
             "$or": [
-                {"phone": {"$regex": text, "$options": "i"}},
-                {"tg_name": {"$regex": text, "$options": "i"}}
+                {"phone": {"$regex": search_text, "$options": "i"}},
+                {"tg_name": {"$regex": search_text, "$options": "i"}}
             ]
         })
         if not acc:
