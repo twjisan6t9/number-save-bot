@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 from threading import Thread
 from flask import Flask
 from telegram import Update
@@ -142,6 +143,9 @@ async def delete_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {phone} pawa jaini!")
 
 def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     async def main():
         app = Application.builder().token(BOT_TOKEN).build()
         conv = ConversationHandler(
@@ -157,14 +161,18 @@ def run_bot():
         app.add_handler(CommandHandler("accounts", accounts))
         app.add_handler(CommandHandler("delete", delete_number))
         app.add_handler(conv)
+        print("Bot starting...")
         async with app:
             await app.start()
             await app.updater.start_polling(drop_pending_updates=True)
+            print("Bot polling started!")
             await asyncio.Event().wait()
-    asyncio.run(main())
+
+    loop.run_until_complete(main())
 
 if __name__ == "__main__":
     t = Thread(target=run_bot, daemon=True)
     t.start()
+    time.sleep(3)
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
