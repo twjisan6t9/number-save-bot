@@ -25,7 +25,6 @@ WAITING_PASSWORD = 2
 WAITING_NUMBER_ADD = 3
 WAITING_LOGIN_NUMBER = 4
 WAITING_DELETE_NUMBER = 5
-WAITING_OTP_NUMBER = 6
 login_sessions = {}
 active_listeners = {}
 
@@ -52,12 +51,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def get_otp_for_number(phone, session_string, bot_app):
-    """নম্বরে OTP request করে এবং আসলে forward করে"""
     try:
         client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
         await client.connect()
 
-        # OTP request পাঠাও
+        if not await client.is_user_authorized():
+            await bot_app.bot.send_message(
+                OWNER_ID,
+                f"❌ `{phone}` এর session expired! আবার login করুন।",
+                parse_mode="Markdown"
+            )
+            await client.disconnect()
+            return
+
         await client.send_code_request(phone)
         await bot_app.bot.send_message(
             OWNER_ID,
@@ -65,9 +71,12 @@ async def get_otp_for_number(phone, session_string, bot_app):
             parse_mode="Markdown"
         )
 
-        # OTP আসার জন্য অপেক্ষা করো
-        @client.on(events.NewMessage(from_users=777000))
+        otp_received = False
+
+        @client.on(events.NewMessage(from_users=42777))
         async def otp_handler(event):
+            nonlocal otp_received
+            otp_received = True
             msg = event.message.text
             await bot_app.bot.send_message(
                 OWNER_ID,
@@ -76,28 +85,29 @@ async def get_otp_for_number(phone, session_string, bot_app):
                 f"🔑 মেসেজ:\n{msg}",
                 parse_mode="Markdown"
             )
-            await client.disconnect()
-            if phone in active_listeners:
-                del active_listeners[phone]
 
         active_listeners[phone] = client
 
-        # ৬০ সেকেন্ড পর্যন্ত অপেক্ষা করো
-        await asyncio.sleep(60)
-        if phone in active_listeners:
-            await client.disconnect()
-            del active_listeners[phone]
+        for _ in range(90):
+            await asyncio.sleep(1)
+            if otp_received:
+                break
+
+        if not otp_received:
             await bot_app.bot.send_message(
                 OWNER_ID,
                 f"⏰ `{phone}` এর OTP timeout হয়েছে!",
                 parse_mode="Markdown"
             )
 
+        await client.disconnect()
+        if phone in active_listeners:
+            del active_listeners[phone]
+
     except Exception as e:
-        await bot_app.bot.send_message(
-            OWNER_ID,
-            f"❌ Error: {str(e)}",
-        )
+        await bot_app.bot.send_message(OWNER_ID, f"❌ Error: {str(e)}")
+        if phone in active_listeners:
+            del active_listeners[phone]
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -119,7 +129,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = "📱 *সেভ করা নম্বর:*\n\n"
             for i, acc in enumerate(all_numbers, 1):
                 status = "✅ Active" if acc.get("active") else "❌ Login নেই"
-                text += f"{i}. `{acc['phone']}` - {status}\n"
+                listener = "👂 Listening" if acc['phone'] in active_listeners else "🔇 Off"
+                text += f"{i}. `{acc['phone']}` - {status} | {listener}\n"
             await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
     elif query.data == "login":
@@ -133,17 +144,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "get_otp":
         all_numbers = list(numbers_col.find({"active": True}))
         if not all_numbers:
-            await query.message.reply_text("❌ কোনো Active নম্বর নেই!\nআগে নম্বর login করুন।", reply_markup=main_menu())
+            await query.message.reply_text(
+                "❌ কোনো Active নম্বর নেই!\nআগে নম্বর login করুন।",
+                reply_markup=main_menu()
+            )
             return
         if len(all_numbers) == 1:
-            # একটাই নম্বর থাকলে সরাসরি OTP নাও
             acc = all_numbers[0]
-            await query.message.reply_text(f"⏳ `{acc['phone']}` এ OTP পাঠানো হচ্ছে...", parse_mode="Markdown")
+            await query.message.reply_text(
+                f"⏳ `{acc['phone']}` এ OTP পাঠানো হচ্ছে...",
+                parse_mode="Markdown"
+            )
             asyncio.create_task(
                 get_otp_for_number(acc['phone'], acc['session'], context.application)
             )
         else:
-            # একাধিক নম্বর থাকলে বেছে নাও
             keyboard = []
             for acc in all_numbers:
                 keyboard.append([InlineKeyboardButton(
@@ -162,7 +177,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not acc:
             await query.message.reply_text("❌ নম্বর পাওয়া যায়নি!", reply_markup=main_menu())
             return
-        await query.message.reply_text(f"⏳ `{phone}` এ OTP পাঠানো হচ্ছে...", parse_mode="Markdown")
+        await query.message.reply_text(
+            f"⏳ `{phone}` এ OTP পাঠানো হচ্ছে...",
+            parse_mode="Markdown"
+        )
         asyncio.create_task(
             get_otp_for_number(phone, acc['session'], context.application)
         )
