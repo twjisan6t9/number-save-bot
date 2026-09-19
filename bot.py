@@ -151,18 +151,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status = "✅ Active" if acc.get("active") else "❌ Login নেই"
                 listener = "👂" if acc['phone'] in active_listeners else ""
                 text += f"{pos}️⃣ {name} - `{acc['phone']}` {status} {listener}\n"
-            await query.message.reply_text(
-                text,
-                parse_mode="Markdown",
-                reply_markup=main_menu()
-            )
+            await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
     elif query.data == "search":
         context.user_data["state"] = WAITING_SEARCH
-        await query.message.reply_text(
-            "🔍 নম্বর বা নাম লিখুন:\n_(0 দিয়েও লিখতে পারো)_",
-            parse_mode="Markdown"
-        )
+        await query.message.reply_text("🔍 নম্বর বা নাম লিখুন:")
 
     elif query.data == "login":
         context.user_data["state"] = WAITING_LOGIN_NUMBER
@@ -195,15 +188,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = numbers_col.delete_one({"phone": phone})
         if result.deleted_count:
             reorder_positions()
-            await query.message.reply_text(
-                f"✅ {phone} ডিলিট হয়েছে!",
-                reply_markup=main_menu()
-            )
+            await query.message.reply_text(f"✅ {phone} ডিলিট হয়েছে!", reply_markup=main_menu())
         else:
-            await query.message.reply_text(
-                f"❌ {phone} পাওয়া যায়নি!",
-                reply_markup=main_menu()
-            )
+            await query.message.reply_text(f"❌ {phone} পাওয়া যায়নি!", reply_markup=main_menu())
 
     elif query.data == "get_otp":
         all_numbers = list(numbers_col.find({"active": True}).sort("position", 1))
@@ -241,10 +228,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone = query.data.replace("otp_", "")
         acc = numbers_col.find_one({"phone": phone})
         if not acc:
-            await query.message.reply_text(
-                "❌ নম্বর পাওয়া যায়নি!",
-                reply_markup=main_menu()
-            )
+            await query.message.reply_text("❌ নম্বর পাওয়া যায়নি!", reply_markup=main_menu())
             return
         await query.message.reply_text(
             f"⏳ `{phone}` এ OTP listen শুরু হচ্ছে...",
@@ -271,17 +255,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == WAITING_SEARCH:
         context.user_data["state"] = None
-        # 0 দিয়ে শুরু হলে +880 যোগ করো
-        if text.startswith("0"):
-            search_text = "+88" + text
-        elif text.startswith("88") and not text.startswith("+"):
-            search_text = "+" + text
-        else:
-            search_text = text
         acc = numbers_col.find_one({
             "$or": [
-                {"phone": {"$regex": search_text, "$options": "i"}},
-                {"tg_name": {"$regex": search_text, "$options": "i"}}
+                {"phone": {"$regex": text, "$options": "i"}},
+                {"tg_name": {"$regex": text, "$options": "i"}}
             ]
         })
         if not acc:
@@ -293,12 +270,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pos = acc.get("position", "?")
         name = acc.get("tg_name", "Unknown")
         status = "✅ Active" if acc.get("active") else "❌ Login নেই"
+        listener = "👂 Listening" if acc['phone'] in active_listeners else "🔇 Off"
         result_text = (
             f"🔍 *খোঁজার ফলাফল:*\n\n"
             f"📍 Position: {pos}\n"
             f"👤 নাম: {name}\n"
             f"📱 নম্বর: `{acc['phone']}`\n"
-            f"🔘 Status: {status}"
+            f"🔘 Status: {status}\n"
+            f"👂 Listener: {listener}"
         )
         await update.message.reply_text(
             result_text,
@@ -309,16 +288,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif state == WAITING_NUMBER_ADD:
         context.user_data["state"] = None
         if not text.startswith("+"):
-            await update.message.reply_text(
-                "❌ নম্বর + দিয়ে শুরু করুন!\nযেমন: +8801XXXXXXXXX",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text("❌ নম্বর + দিয়ে শুরু করুন!", reply_markup=main_menu())
             return
         if numbers_col.find_one({"phone": text}):
-            await update.message.reply_text(
-                f"⚠️ {text} আগে থেকেই আছে!",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text(f"⚠️ {text} আগে থেকেই আছে!", reply_markup=main_menu())
             return
         position = get_next_position()
         numbers_col.insert_one({
@@ -336,10 +309,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif state == WAITING_LOGIN_NUMBER:
         if not numbers_col.find_one({"phone": text}):
             context.user_data["state"] = None
-            await update.message.reply_text(
-                f"❌ {text} লিস্টে নেই!",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text(f"❌ {text} লিস্টে নেই!", reply_markup=main_menu())
             return
         try:
             client = TelegramClient(StringSession(), API_ID, API_HASH)
@@ -350,19 +320,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📱 OTP পাঠানো হয়েছে! কোড দিন:")
         except Exception as e:
             context.user_data["state"] = None
-            await update.message.reply_text(
-                f"❌ Error: {str(e)}",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
 
     elif state == WAITING_CODE:
         session_data = login_sessions.get(update.effective_user.id)
         if not session_data:
             context.user_data["state"] = None
-            await update.message.reply_text(
-                "❌ Session নেই!",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
             return
         client = session_data["client"]
         phone = session_data["phone"]
@@ -391,19 +355,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["state"] = None
             if update.effective_user.id in login_sessions:
                 del login_sessions[update.effective_user.id]
-            await update.message.reply_text(
-                f"❌ Error: {str(e)}",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
 
     elif state == WAITING_PASSWORD:
         session_data = login_sessions.get(update.effective_user.id)
         if not session_data:
             context.user_data["state"] = None
-            await update.message.reply_text(
-                "❌ Session নেই!",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text("❌ Session নেই!", reply_markup=main_menu())
             return
         client = session_data["client"]
         phone = session_data["phone"]
@@ -429,15 +387,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["state"] = None
             if update.effective_user.id in login_sessions:
                 del login_sessions[update.effective_user.id]
-            await update.message.reply_text(
-                f"❌ Error: {str(e)}",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=main_menu())
 
     else:
         context.user_data["state"] = None
         await update.message.reply_text(
-            "👑 *JISAN NUMBER BOT*\n\nমেনু থেকে অপশন বেছে নিন।",
+            "👑 *JISAN NUMBER BOT*",
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
