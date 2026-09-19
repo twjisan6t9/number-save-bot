@@ -43,15 +43,6 @@ def reorder_positions():
             {"$set": {"position": i}}
         )
 
-def normalize_phone(text):
-    """যেকোনো format এর নম্বর normalize করো"""
-    text = text.strip()
-    if text.startswith("0"):
-        return "+88" + text
-    elif text.startswith("88") and not text.startswith("+"):
-        return "+" + text
-    return text
-
 def main_menu():
     keyboard = [
         [InlineKeyboardButton("➕ নতুন নম্বর যোগ করুন", callback_data="add")],
@@ -165,25 +156,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "search":
         context.user_data["state"] = WAITING_SEARCH
-        await query.message.reply_text(
-            "🔍 নম্বর বা নাম লিখুন:\n_(0 বা +880 যেকোনো format চলবে)_",
-            parse_mode="Markdown"
-        )
+        await query.message.reply_text("🔍 নম্বর বা নাম লিখুন:")
 
     elif query.data == "stats":
         total = numbers_col.count_documents({})
         active = numbers_col.count_documents({"active": True})
         inactive = total - active
         listening = len(active_listeners)
-        stats_text = (
+        await query.message.reply_text(
             f"📊 *স্ট্যাটিস্টিক্স:*\n\n"
             f"📱 মোট নম্বর: {total}\n"
             f"✅ Active: {active}\n"
             f"❌ Login নেই: {inactive}\n"
-            f"👂 এখন Listening: {listening}"
-        )
-        await query.message.reply_text(
-            stats_text,
+            f"👂 এখন Listening: {listening}",
             parse_mode="Markdown",
             reply_markup=main_menu()
         )
@@ -286,11 +271,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == WAITING_SEARCH:
         context.user_data["state"] = None
-        search_text = normalize_phone(text)
         acc = numbers_col.find_one({
             "$or": [
-                {"phone": {"$regex": search_text, "$options": "i"}},
-                {"tg_name": {"$regex": search_text, "$options": "i"}}
+                {"phone": {"$regex": text, "$options": "i"}},
+                {"tg_name": {"$regex": text, "$options": "i"}}
             ]
         })
         if not acc:
