@@ -141,34 +141,30 @@ async def delete_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"❌ {phone} pawa jaini!")
 
-async def run_bot():
-    application = Application.builder().token(BOT_TOKEN).build()
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("login", login)],
-        states={
-            WAITING_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_code)],
-            WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
-        },
-        fallbacks=[]
-    )
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("addnumber", addnumber))
-    application.add_handler(CommandHandler("accounts", accounts))
-    application.add_handler(CommandHandler("delete", delete_number))
-    application.add_handler(conv_handler)
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await asyncio.Event().wait()
-
-def start_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_bot())
+def run_bot():
+    async def main():
+        app = Application.builder().token(BOT_TOKEN).build()
+        conv = ConversationHandler(
+            entry_points=[CommandHandler("login", login)],
+            states={
+                WAITING_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_code)],
+                WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
+            },
+            fallbacks=[]
+        )
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("addnumber", addnumber))
+        app.add_handler(CommandHandler("accounts", accounts))
+        app.add_handler(CommandHandler("delete", delete_number))
+        app.add_handler(conv)
+        async with app:
+            await app.start()
+            await app.updater.start_polling(drop_pending_updates=True)
+            await asyncio.Event().wait()
+    asyncio.run(main())
 
 if __name__ == "__main__":
-    t = Thread(target=start_bot)
-    t.daemon = True
+    t = Thread(target=run_bot, daemon=True)
     t.start()
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
