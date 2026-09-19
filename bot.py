@@ -48,6 +48,7 @@ def main_menu():
         [InlineKeyboardButton("➕ নতুন নম্বর যোগ করুন", callback_data="add")],
         [InlineKeyboardButton("📱 সেভ করা নম্বর", callback_data="list")],
         [InlineKeyboardButton("🔍 নম্বর খুঁজুন", callback_data="search")],
+        [InlineKeyboardButton("📊 স্ট্যাটিস্টিক্স", callback_data="stats")],
         [InlineKeyboardButton("🔑 লগইন করুন", callback_data="login")],
         [InlineKeyboardButton("🗑️ নম্বর ডিলিট করুন", callback_data="delete")],
         [InlineKeyboardButton("⚡ OTP নিন", callback_data="get_otp")],
@@ -157,6 +158,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = WAITING_SEARCH
         await query.message.reply_text("🔍 নম্বর বা নাম লিখুন:")
 
+    elif query.data == "stats":
+        total = numbers_col.count_documents({})
+        active = numbers_col.count_documents({"active": True})
+        inactive = total - active
+        listening = len(active_listeners)
+        stats_text = (
+            f"📊 *স্ট্যাটিস্টিক্স:*\n\n"
+            f"📱 মোট নম্বর: {total}\n"
+            f"✅ Active: {active}\n"
+            f"❌ Login নেই: {inactive}\n"
+            f"👂 এখন Listening: {listening}"
+        )
+        await query.message.reply_text(
+            stats_text,
+            parse_mode="Markdown",
+            reply_markup=main_menu()
+        )
+
     elif query.data == "login":
         context.user_data["state"] = WAITING_LOGIN_NUMBER
         await query.message.reply_text("📝 লগইন করতে নম্বর লিখুন:")
@@ -255,10 +274,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == WAITING_SEARCH:
         context.user_data["state"] = None
+        if text.startswith("0"):
+            search_text = "+88" + text
+        elif text.startswith("88") and not text.startswith("+"):
+            search_text = "+" + text
+        else:
+            search_text = text
         acc = numbers_col.find_one({
             "$or": [
-                {"phone": {"$regex": text, "$options": "i"}},
-                {"tg_name": {"$regex": text, "$options": "i"}}
+                {"phone": {"$regex": search_text, "$options": "i"}},
+                {"tg_name": {"$regex": search_text, "$options": "i"}}
             ]
         })
         if not acc:
