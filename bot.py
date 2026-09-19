@@ -43,6 +43,15 @@ def reorder_positions():
             {"$set": {"position": i}}
         )
 
+def normalize_phone(text):
+    """যেকোনো format এর নম্বর normalize করো"""
+    text = text.strip()
+    if text.startswith("0"):
+        return "+88" + text
+    elif text.startswith("88") and not text.startswith("+"):
+        return "+" + text
+    return text
+
 def main_menu():
     keyboard = [
         [InlineKeyboardButton("➕ নতুন নম্বর যোগ করুন", callback_data="add")],
@@ -156,7 +165,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "search":
         context.user_data["state"] = WAITING_SEARCH
-        await query.message.reply_text("🔍 নম্বর বা নাম লিখুন:")
+        await query.message.reply_text(
+            "🔍 নম্বর বা নাম লিখুন:\n_(0 বা +880 যেকোনো format চলবে)_",
+            parse_mode="Markdown"
+        )
 
     elif query.data == "stats":
         total = numbers_col.count_documents({})
@@ -274,12 +286,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == WAITING_SEARCH:
         context.user_data["state"] = None
-        if text.startswith("0"):
-            search_text = "+88" + text
-        elif text.startswith("88") and not text.startswith("+"):
-            search_text = "+" + text
-        else:
-            search_text = text
+        search_text = normalize_phone(text)
         acc = numbers_col.find_one({
             "$or": [
                 {"phone": {"$regex": search_text, "$options": "i"}},
