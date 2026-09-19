@@ -4,7 +4,7 @@ from pymongo import MongoClient
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +36,12 @@ def main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # আগে নিচের Reply keyboard সরাও
+    await update.message.reply_text(
+        "লোড হচ্ছে...",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    # তারপর Inline মেনু দেখাও
     await update.message.reply_text(
         "👑 *JISAN NUMBER BOT*\n\nস্বাগতম! নিচের মেনু থেকে অপশন বেছে নিন।",
         parse_mode="Markdown",
