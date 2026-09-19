@@ -1,11 +1,10 @@
 import os
-import asyncio
 import logging
 from pymongo import MongoClient
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 logging.basicConfig(level=logging.INFO)
@@ -22,61 +21,74 @@ numbers_col = db["numbers"]
 
 WAITING_CODE = 1
 WAITING_PASSWORD = 2
+WAITING_NUMBER_ADD = 3
+WAITING_LOGIN_NUMBER = 4
+WAITING_DELETE_NUMBER = 5
 login_sessions = {}
+
+MAIN_MENU = ReplyKeyboardMarkup([
+    [KeyboardButton("➕ নতুন নম্বর যোগ করুন")],
+    [KeyboardButton("📱 সেভ করা নম্বর")],
+    [KeyboardButton("🔑 লগইন করুন")],
+    [KeyboardButton("🗑️ নম্বর ডিলিট করুন")],
+], resize_keyboard=True)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome!\n\n"
-        "/addnumber +880X - Number add\n"
-        "/login +880X - Login\n"
-        "/accounts - List\n"
-        "/delete +880X - Delete"
+        "👑 *JISAN NUMBER BOT*\n\nস্বাগতম! নিচের মেনু থেকে অপশন বেছে নিন।",
+        parse_mode="Markdown",
+        reply_markup=MAIN_MENU
     )
 
-async def addnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Permission nai!")
+        await update.message.reply_text("❌ Permission নেই!")
         return
-    if not context.args:
-        await update.message.reply_text("❌ Use: /addnumber +880XXXXXXXXX")
-        return
-    phone = context.args[0]
+    
+    text = update.message.text
+
+    if text == "➕ নতুন নম্বর যোগ করুন":
+        await update.message.reply_text("📝 নম্বর লিখুন (যেমন: +8801XXXXXXXXX):")
+        return WAITING_NUMBER_ADD
+
+    elif text == "📱 সেভ করা নম্বর":
+        all_numbers = list(numbers_col.find())
+        if not all_numbers:
+            await update.message.reply_text("📋 কোনো নম্বর নেই!", reply_markup=MAIN_MENU)
+        else:
+            text_out = "📱 *সেভ করা নম্বর:*\n\n"
+            for i, acc in enumerate(all_numbers, 1):
+                status = "✅ Active" if acc.get("active") else "❌ Login নেই"
+                text_out += f"{i}. `{acc['phone']}` - {status}\n"
+            await update.message.reply_text(text_out, parse_mode="Markdown", reply_markup=MAIN_MENU)
+
+    elif text == "🔑 লগইন করুন":
+        await update.message.reply_text("📝 লগইন করতে নম্বর লিখুন:")
+        return WAITING_LOGIN_NUMBER
+
+    elif text == "🗑️ নম্বর ডিলিট করুন":
+        await update.message.reply_text("📝 ডিলিট করতে নম্বর লিখুন:")
+        return WAITING_DELETE_NUMBER
+
+async def add_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip()
     if numbers_col.find_one({"phone": phone}):
-        await update.message.reply_text(f"⚠️ {phone} already ache!")
-        return
+        await update.message.reply_text(f"⚠️ {phone} আগে থেকেই আছে!", reply_markup=MAIN_MENU)
+        return ConversationHandler.END
     numbers_col.insert_one({"phone": phone, "session": None, "active": False})
-    await update.message.reply_text(f"✅ {phone} saved!")
+    await update.message.reply_text(f"✅ {phone} সেভ হয়েছে!", reply_markup=MAIN_MENU)
+    return ConversationHandler.END
 
-async def accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Permission nai!")
-        return
-    all_numbers = list(numbers_col.find())
-    if not all_numbers:
-        await update.message.reply_text("📋 Kono number nai!")
-        return
-    text = "📋 Numbers:\n\n"
-    for i, acc in enumerate(all_numbers, 1):
-        status = "✅ Active" if acc.get("active") else "❌ Not logged in"
-        text += f"{i}. {acc['phone']} - {status}\n"
-    await update.message.reply_text(text)
-
-async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Permission nai!")
-        return
-    if not context.args:
-        await update.message.reply_text("❌ Use: /login +880XXXXXXXXX")
-        return
-    phone = context.args[0]
+async def login_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip()
     if not numbers_col.find_one({"phone": phone}):
-        await update.message.reply_text(f"❌ {phone} list-e nai!")
-        return
+        await update.message.reply_text(f"❌ {phone} লিস্টে নেই!", reply_markup=MAIN_MENU)
+        return ConversationHandler.END
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     await client.send_code_request(phone)
     login_sessions[update.effective_user.id] = {"client": client, "phone": phone}
-    await update.message.reply_text("📱 OTP pathano hoyeche! Code dao:")
+    await update.message.reply_text("📱 OTP পাঠানো হয়েছে! কোড দিন:")
     return WAITING_CODE
 
 async def get_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,13 +105,13 @@ async def get_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
         await client.disconnect()
         del login_sessions[user_id]
-        await update.message.reply_text(f"✅ {phone} login hoyeche!")
+        await update.message.reply_text(f"✅ {phone} লগইন সফল!", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     except SessionPasswordNeededError:
-        await update.message.reply_text("🔐 2FA password dao:")
+        await update.message.reply_text("🔐 2FA পাসওয়ার্ড দিন:")
         return WAITING_PASSWORD
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=MAIN_MENU)
         return ConversationHandler.END
 
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,40 +128,37 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         numbers_col.update_one({"phone": phone}, {"$set": {"session": session_string, "active": True}})
         await client.disconnect()
         del login_sessions[user_id]
-        await update.message.reply_text("✅ Login hoyeche!")
+        await update.message.reply_text("✅ লগইন সফল!", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=MAIN_MENU)
         return ConversationHandler.END
 
 async def delete_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Permission nai!")
-        return
-    if not context.args:
-        await update.message.reply_text("❌ Use: /delete +880XXXXXXXXX")
-        return
-    phone = context.args[0]
+    phone = update.message.text.strip()
     result = numbers_col.delete_one({"phone": phone})
     if result.deleted_count:
-        await update.message.reply_text(f"✅ {phone} deleted!")
+        await update.message.reply_text(f"✅ {phone} ডিলিট হয়েছে!", reply_markup=MAIN_MENU)
     else:
-        await update.message.reply_text(f"❌ {phone} pawa jaini!")
+        await update.message.reply_text(f"❌ {phone} পাওয়া যায়নি!", reply_markup=MAIN_MENU)
+    return ConversationHandler.END
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
     conv = ConversationHandler(
-        entry_points=[CommandHandler("login", login)],
+        entry_points=[
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu)
+        ],
         states={
+            WAITING_NUMBER_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_number)],
+            WAITING_LOGIN_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, login_number)],
             WAITING_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_code)],
             WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
+            WAITING_DELETE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_number)],
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("start", start)]
     )
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("addnumber", addnumber))
-    application.add_handler(CommandHandler("accounts", accounts))
-    application.add_handler(CommandHandler("delete", delete_number))
     application.add_handler(conv)
     print("Bot running!")
     application.run_polling(drop_pending_updates=True)
