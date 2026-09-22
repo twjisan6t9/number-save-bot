@@ -1,5 +1,4 @@
 import os
-import re
 import logging
 import asyncio
 from pymongo import MongoClient
@@ -98,14 +97,11 @@ async def get_otp_for_number(phone, session_string, bot_app):
             nonlocal otp_received
             otp_received = True
             msg = event.message.text
-            code_match = re.search(r'\b(\d{5})\b', msg)
-            code = code_match.group(1) if code_match else "N/A"
             await bot_app.bot.send_message(
                 OWNER_ID,
                 f"⚡ *OTP এসেছে!*\n\n"
                 f"📱 নম্বর: `{phone}`\n"
-                f"🔑 কোড: `{code}`\n\n"
-                f"📝 মেসেজ:\n{msg}",
+                f"🔑 মেসেজ:\n{msg}",
                 parse_mode="Markdown"
             )
 
